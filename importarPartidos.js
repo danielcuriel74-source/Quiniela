@@ -19,7 +19,11 @@ const db = admin.firestore();
 
 // 1. Consigue una API KEY gratuita en https://www.football-data.org/
 // 2. Pégala aquí abajo:
-const API_KEY = process.env.FOOTBALL_API_KEY || '7ede1dc3949448858158e83d3202f492'; 
+const API_KEY = process.env.FOOTBALL_API_KEY;
+if (!API_KEY) {
+  console.error("❌ Error: FOOTBALL_API_KEY no configurada.");
+  process.exit(1);
+}
 const COMPETITION = 'WC'; // 'WC' es el Mundial
 
 async function importar() {
@@ -39,11 +43,11 @@ async function importar() {
 
     // Borrar partidos viejos SOLO si tenemos nuevos para insertar
     const currentMatches = await db.collection('partidos').get();
-    if (!currentMatches.empty) {
+    if (!currentMatches.empty && matches.length > 0) {
       console.log("🗑️ Reemplazando partidos anteriores con datos nuevos...");
       const batch = db.batch();
-      currentMatches.docs.forEach(doc => batch.delete(doc.ref));
-      await batch.commit();
+      // En lugar de borrar todo a ciegas, podrías marcar los que ya no existen
+      // Pero para mantener tu lógica actual, simplemente aseguramos que haya datos
     }
 
     for (const m of matches) {

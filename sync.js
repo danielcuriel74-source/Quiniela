@@ -15,20 +15,29 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 async function updateScores() {
-  const API_KEY = process.env.FOOTBALL_API_KEY || '7ede1dc3949448858158e83d3202f492';
+  const API_KEY = process.env.FOOTBALL_API_KEY;
+  if (!API_KEY) {
+    console.error("❌ Error: FOOTBALL_API_KEY no configurada en las variables de entorno.");
+    return;
+  }
   const COMPETITION = 'WC'; // 'WC' para el Mundial
 
   const res = await axios.get(`https://api.football-data.org/v4/competitions/${COMPETITION}/matches`, {
     headers: { 'X-Auth-Token': API_KEY }
   });
 
-  const finishedMatches = res.data.matches.filter(m => m.status === 'FINISHED');
+  if (!res.data || !res.data.matches) {
+    console.error("⚠️ No se recibieron partidos de la API.");
+    return;
+  }
+
+  const finishedMatches = res.data.matches.filter(m => m.status === 'FINISHED' || m.status === 'TIMED');
 
   for (const match of finishedMatches) {
     const matchId = match.id.toString();
     const { homeTeam, awayTeam, score } = match;
-    const realHome = score.fullTime.home;
-    const realAway = score.fullTime.away;
+    const realHome = score.fullTime.home ?? 0;
+    const realAway = score.fullTime.away ?? 0;
 
     // Actualizar el resultado real en la colección de partidos para que se vea en la UI
     await db.collection('partidos').doc(matchId).set({
@@ -43,6 +52,10 @@ async function updateScores() {
       .where('processed', '==', false)
       .get();
     
+    const batch = db.batch();
+    let hasUpdates = false;
+    let count = 0;
+
     for (const doc of preds.docs) {
       const data = doc.data();
       let points = 0;
@@ -50,14 +63,22 @@ async function updateScores() {
       else if (Math.sign(data.homeScore - data.awayScore) === Math.sign(realHome - realAway)) points = 1;
 
       // Actualizar la predicción
-      await doc.ref.update({ pointsEarned: points, processed: true });
+      batch.update(doc.ref, { pointsEarned: points, processed: true });
+      count++;
+      hasUpdates = true;
 
       if (points === 0) continue;
 
       // Actualizar el acumulado del usuario
-      await db.collection('usuarios').doc(data.userId).set({
+      const userRef = db.collection('usuarios').doc(data.userId);
+      batch.set(userRef, {
         totalPoints: admin.firestore.FieldValue.increment(points)
       }, { merge: true });
+    }
+
+    if (hasUpdates) {
+      await batch.commit();
+      console.log(`📊 Se procesaron ${count} predicciones para el partido ${matchId} (${homeTeam.name} vs ${awayTeam.name})`);
     }
   }
 }
