@@ -21,7 +21,7 @@ const db = admin.firestore();
 // 2. Pégala aquí abajo:
 const API_KEY = process.env.FOOTBALL_API_KEY;
 if (!API_KEY) {
-  console.error("❌ Error: FOOTBALL_API_KEY no configurada.");
+  console.error("❌ Error: FOOTBALL_API_KEY no configurada. Si estás en local, usa: $env:FOOTBALL_API_KEY='tu_llave'; node importarPartidos.js");
   process.exit(1);
 }
 const COMPETITION = 'WC'; // 'WC' es el Mundial
@@ -44,11 +44,20 @@ async function importar() {
     // Borrar partidos viejos SOLO si tenemos nuevos para insertar
     const currentMatches = await db.collection('partidos').get();
     if (!currentMatches.empty && matches.length > 0) {
-      console.log("🗑️ Reemplazando partidos anteriores con datos nuevos...");
-      const batch = db.batch();
-      // En lugar de borrar todo a ciegas, podrías marcar los que ya no existen
-      // Pero para mantener tu lógica actual, simplemente aseguramos que haya datos
+      console.log(`🗑️ Eliminando ${currentMatches.size} partidos anteriores...`);
+      // Firestore tiene un límite de 500 operaciones por batch
+      const chunks = [];
+      for (let i = 0; i < currentMatches.docs.length; i += 500) {
+        chunks.push(currentMatches.docs.slice(i, i + 500));
+      }
+      for (const chunk of chunks) {
+        const batch = db.batch();
+        chunk.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+      }
     }
+
+    const insertBatch = db.batch();
 
     for (const m of matches) {
       // Solo importamos partidos que tengan equipos definidos
@@ -63,10 +72,13 @@ async function importar() {
         lastUpdated: admin.firestore.FieldValue.serverTimestamp()
       };
       // Usamos el ID de la API para que sync.js pueda actualizar los puntos después automáticamente
-      await db.collection('partidos').doc(m.id.toString()).set(data);
+      const matchRef = db.collection('partidos').doc(m.id.toString());
+      insertBatch.set(matchRef, data);
       console.log(`✅ ${data.homeTeam} vs ${data.awayTeam} importado.`);
     }
-    console.log("\n✨ ¡Importación terminada! Entra a tu App para ver las hojas generadas.");
+
+    await insertBatch.commit();
+    console.log("\n✨ ¡Importación terminada exitosamente!");
   } catch (e) {
     if (e.message.includes("PERMISSION_DENIED")) {
       console.error("❌ ERROR DE PERMISOS: Debes activar Firestore en la consola de Firebase y crear la base de datos.");
