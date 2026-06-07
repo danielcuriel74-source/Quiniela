@@ -18,9 +18,11 @@ service cloud.firestore {
     }
 
     function isMatchOpen(matchId) {
-      let partido = get(/databases/$(database)/documents/partidos/$(matchId)).data;
-      // Solo permite si la hora actual + 15 minutos es menor a la hora del partido
-      return partido.utcDate != null && request.time + duration.value(15, 'm') < timestamp.value(partido.utcDate);
+      // Optimizamos: Usamos solo get(). Si no existe, el acceso a .data fallará
+      // y la regla denegará el permiso automáticamente, ahorrando una llamada.
+      let partidoPath = /databases/$(database)/documents/partidos/$(matchId);
+      let partido = get(partidoPath).data;
+      return partido != null && partido.utcDate != null && request.time + duration.value(15, 'm') < timestamp.value(partido.utcDate);
     }
   }
 }

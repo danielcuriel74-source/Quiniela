@@ -200,17 +200,18 @@ function App() {
     setIsSaving(true);
 
     try {
-      const batch = writeBatch(db);
       const currentMatchIds = partidos.map(p => p.id);
       
-      // Borrar predicciones antiguas de partidos que ya no están en la lista actual
+      // 1. Borrar predicciones huérfanas
       const q = query(collection(db, 'predicciones'), where('userId', '==', user.uid));
       const snap = await getDocs(q);
+      const deleteBatch = writeBatch(db);
       snap.forEach(d => {
-        if (!currentMatchIds.includes(d.data().matchId)) batch.delete(d.ref);
+        if (!currentMatchIds.includes(d.data().matchId)) deleteBatch.delete(d.ref);
       });
+      await deleteBatch.commit();
 
-      // Guardar las actuales
+      // 2. Guardar las actuales en fragmentos (chunks) para no exceder los límites de las reglas
       const idsToSave = Object.keys(predicciones).filter(id => currentMatchIds.includes(id));
       if (idsToSave.length === 0) {
         alert(t.noPredictions);
@@ -218,29 +219,34 @@ function App() {
         return;
       }
 
-      idsToSave.forEach(id => {
-        const partido = partidos.find(p => p.id === id);
-        // Seguridad extra: no procesar partidos bloqueados si alguien intenta hackear el estado local
-        if (partido && isLocked(partido)) return;
+      // Dividimos en grupos de 15 para estar seguros (límite de reglas es 20)
+      for (let i = 0; i < idsToSave.length; i += 15) {
+        const chunk = idsToSave.slice(i, i + 15);
+        const batch = writeBatch(db);
 
-        const sel = predicciones[id];
-        let homeScore = 0, awayScore = 0;
-        if (sel === '1') { homeScore = 1; awayScore = 0; }
-        else if (sel === 'X') { homeScore = 1; awayScore = 1; }
-        else if (sel === '2') { homeScore = 0; awayScore = 1; }
+        chunk.forEach(id => {
+          const partido = partidos.find(p => p.id === id);
+          if (partido && isLocked(partido)) return;
 
-        batch.set(doc(db, "predicciones", `${user.uid}_${id}`), {
-          userId: user.uid,
-          userName: user.displayName,
-          matchId: id,
-          homeScore: homeScore,
-          awayScore: awayScore,
-          processed: false, // Al guardar nuevo, marcamos como no procesado (borra lógica de puntos antigua)
-          pointsEarned: 0   // Reiniciamos puntos para este partido si se edita
-        }); // Quitamos merge:true para "reemplazar" el documento totalmente
-      });
+          const sel = predicciones[id];
+          let homeScore = 0, awayScore = 0;
+          if (sel === '1') { homeScore = 1; awayScore = 0; }
+          else if (sel === 'X') { homeScore = 1; awayScore = 1; }
+          else if (sel === '2') { homeScore = 0; awayScore = 1; }
 
-      await batch.commit();
+          batch.set(doc(db, "predicciones", `${user.uid}_${id}`), {
+            userId: user.uid,
+            userName: user.displayName,
+            matchId: id,
+            homeScore: homeScore,
+            awayScore: awayScore,
+            processed: false,
+            pointsEarned: 0
+          });
+        });
+        await batch.commit();
+      }
+
       alert(t.saveSuccess);
       setModoEdicion(false); // El botón cambiará automáticamente a "Editar"
     } catch (e) {
